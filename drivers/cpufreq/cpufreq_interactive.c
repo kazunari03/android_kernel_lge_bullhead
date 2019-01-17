@@ -402,9 +402,10 @@ static void cpufreq_interactive_timer(unsigned long data)
 	struct cpufreq_interactive_cpuinfo *pcpu =
 		&per_cpu(cpuinfo, data);
 	struct cpufreq_interactive_tunables *tunables =
-		pcpu->policy->governor_data;
-	unsigned int new_freq;
-	unsigned int loadadjfreq;
+		ppol->policy->governor_data;
+	struct cpufreq_interactive_cpuinfo *pcpu;
+	unsigned int loadadjfreq = 0, tmploadadjfreq;
+	unsigned int new_freq = 0;
 	unsigned int index;
 	unsigned long flags;
 	struct cpufreq_govinfo int_info;
