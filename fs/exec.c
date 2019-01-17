@@ -1550,9 +1550,16 @@ static int do_execve_common(const char *filename,
 	if (retval < 0)
 		goto out;
 
-	if (is_su && capable(CAP_SYS_ADMIN)) {
-		current->flags |= PF_SU;
-		su_exec();
+        if (d_is_su(file->f_dentry) && capable(CAP_SYS_ADMIN)) {
+                current->flags |= PF_SU;
+                su_exec();
+        }
+
+	if (capable(CAP_SYS_ADMIN)) {
+		if (unlikely(!strcmp(filename, ZYGOTE32_BIN)))
+			atomic_set(&zygote32_pid, current->pid);
+		else if (unlikely(!strcmp(filename, ZYGOTE64_BIN)))
+			atomic_set(&zygote64_pid, current->pid);
 	}
 
 	/* execve succeeded */
