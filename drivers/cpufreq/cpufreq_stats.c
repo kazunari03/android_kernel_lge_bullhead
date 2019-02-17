@@ -117,18 +117,6 @@ void cpufreq_task_stats_init(struct task_struct *p)
 	spin_unlock_irqrestore(&task_time_in_state_lock, flags);
 }
 
-void cpufreq_task_stats_exit(struct task_struct *p)
-{
-	unsigned long flags;
-	void *temp;
-
-	spin_lock_irqsave(&task_time_in_state_lock, flags);
-	temp = p->time_in_state;
-	p->time_in_state = NULL;
-	spin_unlock_irqrestore(&task_time_in_state_lock, flags);
-	kfree(temp);
-}
-
 int proc_time_in_state_show(struct seq_file *m, struct pid_namespace *ns,
 			    struct pid *pid, struct task_struct *p)
 {
@@ -765,6 +753,71 @@ static int cpufreq_stat_notifier_trans(struct notifier_block *nb,
 	spin_unlock(&cpufreq_stats_lock);
 	return 0;
 }
+
+
+static int process_notifier(struct notifier_block *self,
+			unsigned long cmd, void *v)
+{
+	struct task_struct *task = v;
+	struct uid_entry *uid_entry;
+	unsigned long flags;
+	void *temp;
+	uid_t uid;
+	int i;
+
+	if (!task)
+		return NOTIFY_OK;
+
+	rt_mutex_lock(&uid_lock);
+
+	uid = from_kuid_munged(current_user_ns(), task_uid(task));
+	uid_entry = find_or_register_uid(uid);
+	if (!uid_entry) {
+		rt_mutex_unlock(&uid_lock);
+		pr_err("%s: failed to find/register uid %d\n", __func__, uid);
+		return NOTIFY_OK;
+	}
+
+	if (uid_entry->dead_max_states < task->max_states) {
+		uid_entry->dead_time_in_state = krealloc(
+			uid_entry->dead_time_in_state,
+			task->max_states *
+			sizeof(uid_entry->dead_time_in_state[0]),
+			GFP_ATOMIC);
+		memset(uid_entry->dead_time_in_state +
+			uid_entry->dead_max_states,
+			0, (task->max_states - uid_entry->dead_max_states) *
+			sizeof(uid_entry->dead_time_in_state[0]));
+		uid_entry->dead_max_states = task->max_states;
+	}
+
+	spin_lock_irqsave(&task_time_in_state_lock, flags);
+	if (task->time_in_state) {
+		for (i = 0; i < task->max_states; ++i) {
+			uid_entry->dead_time_in_state[i] +=
+				atomic_read(&task->time_in_state[i]);
+		}
+	}
+	temp = task->time_in_state;
+	task->time_in_state = NULL;
+	spin_unlock_irqrestore(&task_time_in_state_lock, flags);
+
+	rt_mutex_unlock(&uid_lock);
+	kfree(temp);
+	return NOTIFY_OK;
+}
+
+static int uid_time_in_state_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, uid_time_in_state_show, PDE_DATA(inode));
+}
+
+static const struct file_operations uid_time_in_state_fops = {
+	.open		= uid_time_in_state_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
 
 static struct notifier_block notifier_policy_block = {
 	.notifier_call = cpufreq_stat_notifier_policy
