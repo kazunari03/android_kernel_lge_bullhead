@@ -90,6 +90,71 @@ static int cpufreq_stats_update(unsigned int cpu)
 	return 0;
 }
 
+void cpufreq_task_stats_init(struct task_struct *p)
+{
+	size_t alloc_size;
+	void *temp;
+	unsigned long flags;
+
+	spin_lock_irqsave(&task_time_in_state_lock, flags);
+	p->time_in_state = NULL;
+	spin_unlock_irqrestore(&task_time_in_state_lock, flags);
+	WRITE_ONCE(p->max_states, 0);
+
+	if (!all_freq_table || !cpufreq_all_freq_init)
+		return;
+
+	WRITE_ONCE(p->max_states, all_freq_table->table_size);
+
+	/* Create all_freq_table for clockticks in all possible freqs in all
+	 * cpus
+	 */
+	alloc_size = p->max_states * sizeof(p->time_in_state[0]);
+	temp = kzalloc(alloc_size, GFP_ATOMIC);
+
+	spin_lock_irqsave(&task_time_in_state_lock, flags);
+	p->time_in_state = temp;
+	spin_unlock_irqrestore(&task_time_in_state_lock, flags);
+}
+
+void cpufreq_task_stats_exit(struct task_struct *p)
+{
+	unsigned long flags;
+	void *temp;
+
+	spin_lock_irqsave(&task_time_in_state_lock, flags);
+	temp = p->time_in_state;
+	p->time_in_state = NULL;
+	spin_unlock_irqrestore(&task_time_in_state_lock, flags);
+	kfree(temp);
+}
+
+int proc_time_in_state_show(struct seq_file *m, struct pid_namespace *ns,
+			    struct pid *pid, struct task_struct *p)
+{
+	int i;
+	cputime_t cputime;
+	unsigned long flags;
+
+	if (!all_freq_table || !cpufreq_all_freq_init || !p->time_in_state)
+		return 0;
+
+	spin_lock(&cpufreq_stats_lock);
+	for (i = 0; i < p->max_states; ++i) {
+		cputime = 0;
+		spin_lock_irqsave(&task_time_in_state_lock, flags);
+		if (p->time_in_state)
+			cputime = atomic_read(&p->time_in_state[i]);
+		spin_unlock_irqrestore(&task_time_in_state_lock, flags);
+
+		seq_printf(m, "%d %lu\n", all_freq_table->freq_table[i],
+			(unsigned long)cputime_to_clock_t(cputime));
+	}
+	spin_unlock(&cpufreq_stats_lock);
+
+	return 0;
+}
+
 static ssize_t show_total_trans(struct cpufreq_policy *policy, char *buf)
 {
 	struct cpufreq_stats *stat = per_cpu(cpufreq_stats_table, policy->cpu);
